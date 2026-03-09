@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="SWIFT - Secure OTP Verification System. Verify your identity with a one-time password sent to your phone.">
+    <title>SWIFT — OTP Verification</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Animated background particles -->
+    <div class="bg-particles" id="bgParticles"></div>
+
+    <!-- Main Container -->
+    <div class="app-container">
+        
+        <!-- Header / Brand -->
+        <header class="brand">
+            <div class="brand-icon">
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <rect width="40" height="40" rx="12" fill="url(#grad1)"/>
+                    <path d="M12 20L18 26L28 14" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                    <defs>
+                        <linearGradient id="grad1" x1="0" y1="0" x2="40" y2="40">
+                            <stop stop-color="#6C63FF"/>
+                            <stop offset="1" stop-color="#3B82F6"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+            <h1 class="brand-name">SWIFT</h1>
+            <p class="brand-tagline">Secure Verification in a Flash</p>
+        </header>
+
+        <!-- Card -->
+        <main class="card" id="mainCard">
+
+            <!-- ===== STEP 1: Phone Number ===== -->
+            <section class="step active" id="step-phone">
+                <div class="step-header">
+                    <div class="step-number">1</div>
+                    <h2>Enter Your Phone Number</h2>
+                    <p>We'll send a one-time verification code to this number.</p>
+                </div>
+
+                <div class="input-group" id="phoneGroup">
+                    <div class="phone-input-wrapper">
+                        <span class="country-code">+91</span>
+                        <input
+                            type="tel"
+                            id="phoneInput"
+                            placeholder="Enter 10-digit mobile number"
+                            maxlength="10"
+                            autocomplete="tel"
+                        />
+                    </div>
+                    <span class="input-error" id="phoneError"></span>
+                </div>
+
+                <button class="btn btn-primary" id="sendOtpBtn" onclick="handleSendOTP()">
+                    <span class="btn-text">Send OTP</span>
+                    <span class="btn-loader" id="sendLoader"></span>
+                    <svg class="btn-arrow" width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M4 10H16M16 10L11 5M16 10L11 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </section>
+
+            <!-- ===== STEP 2: OTP Entry ===== -->
+            <section class="step" id="step-otp">
+                <div class="step-header">
+                    <div class="step-number">2</div>
+                    <h2>Enter Verification Code</h2>
+                    <p>Enter the 6-digit code sent to <strong id="displayPhone"></strong></p>
+                </div>
+
+                <!-- Demo mode banner -->
+                <div class="demo-banner" id="demoBanner" style="display:none;">
+                    <span class="demo-label">DEMO MODE</span>
+                    <span>Your OTP is: <strong id="demoOtp"></strong></span>
+                </div>
+
+                <div class="otp-inputs" id="otpInputs">
+                    <input type="text" class="otp-digit" maxlength="1" data-index="0" inputmode="numeric" pattern="[0-9]" />
+                    <input type="text" class="otp-digit" maxlength="1" data-index="1" inputmode="numeric" pattern="[0-9]" />
+                    <input type="text" class="otp-digit" maxlength="1" data-index="2" inputmode="numeric" pattern="[0-9]" />
+                    <input type="text" class="otp-digit" maxlength="1" data-index="3" inputmode="numeric" pattern="[0-9]" />
+                    <input type="text" class="otp-digit" maxlength="1" data-index="4" inputmode="numeric" pattern="[0-9]" />
+                    <input type="text" class="otp-digit" maxlength="1" data-index="5" inputmode="numeric" pattern="[0-9]" />
+                </div>
+                <span class="input-error" id="otpError"></span>
+
+                <div class="otp-actions">
+                    <button class="btn btn-primary" id="verifyOtpBtn" onclick="handleVerifyOTP()">
+                        <span class="btn-text">Verify OTP</span>
+                        <span class="btn-loader" id="verifyLoader"></span>
+                        <svg class="btn-arrow" width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <path d="M4 10H16M16 10L11 5M16 10L11 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+
+                    <div class="resend-row">
+                        <span id="resendTimer" class="resend-timer">Resend OTP in <strong id="timerCount">30</strong>s</span>
+                        <button class="btn-link" id="resendBtn" style="display:none;" onclick="handleResendOTP()">Resend OTP</button>
+                        <span class="separator">•</span>
+                        <button class="btn-link" onclick="goBack()">Change Number</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== STEP 3: Result ===== -->
+            <section class="step" id="step-result">
+                <div class="result-container" id="resultContainer">
+                    <!-- Dynamically filled by JS -->
+                </div>
+                <button class="btn btn-secondary" onclick="resetAll()" style="margin-top: 24px;">
+                    Start Over
+                </button>
+            </section>
+
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>SWIFT &copy; 2026 — Bare Minimum MVP</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
