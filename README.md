@@ -98,7 +98,7 @@ A comprehensive digital wallet system with:
 ```
                     ┌─────────────────────┐
                     │  Shared Backend API │
-                    │   (FastAPI Port 8000) │
+                    │ (FastAPI Port 8000) │
                     └──────────┬──────────┘
                                │
         ┌──────────────────────┼──────────────────────┐
@@ -122,7 +122,7 @@ A comprehensive digital wallet system with:
                     │
                     ▼
             ┌──────────────────────┐
-            │  College Admin Panel  │
+            │  College Admin Panel │
             │   (Port 3004)        │
             │   HTML/CSS/JS        │
             └──────────────────────┘
@@ -274,7 +274,7 @@ swift-project/
 
 ### Step 1: Clone Repository
 ```bash
-git clone <repository-url>
+git clone https://github.com/Ezhil-Adhithya-P/SWIFT
 cd swift-project
 ```
 
