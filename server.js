@@ -63,14 +63,158 @@ async function sendSMS(phoneNumber, otp) {
 }
 
 // ============================================
-// API Routes
+// SYSTEM DATABASE (Mocked in-memory for MVP)
 // ============================================
+
+const db = {
+    collegeFiatBalance: 12500, // Total actual fiat mapped to tokens
+    students: {
+        '21CS101': { rollNo: '21CS101', phone: process.env.VERIFIED_RECIPIENT_NUMBER, balance: 500, transactions: [] },
+        '21IT105': { rollNo: '21IT105', phone: '+910000000000', balance: 1000, transactions: [] },
+    },
+    vendors: {
+        '1': {
+            id: '1', name: 'Campus Canteen', accumulatedBalance: 1450, bankAccount: 'SBI-XXXX-1234',
+            products: [
+                { id: '1', name: 'Veg Sandwich', internalId: 'ITM-001', stock: 15, isActive: true, price: 40 },
+                { id: '2', name: 'Cold Coffee', internalId: 'ITM-002', stock: 20, isActive: true, price: 30 },
+            ],
+            transactions: []
+        },
+        '2': {
+            id: '2', name: 'Stationery Shop', accumulatedBalance: 820, bankAccount: 'HDFC-XXXX-4567',
+            products: [
+                { id: '4', name: 'A4 Paper Rim', internalId: 'ITM-004', stock: 5, isActive: true, price: 200 },
+                { id: '5', name: 'Blue Pen', internalId: 'ITM-005', stock: 50, isActive: true, price: 25 },
+            ],
+            transactions: []
+        }
+    },
+    studentTopupHistory: [], // Admin sees this
+};
+
+// ============================================
+// API Routes (Integration Endpoints)
+// ============================================
+
+// --- 1. STUDENT WALLET APIs ---
+app.get('/api/student/:rollNo', (req, res) => {
+    const student = db.students[req.params.rollNo];
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
+    res.json({ success: true, student });
+});
+
+app.post('/api/student/topup', (req, res) => {
+    const { rollNo, amount } = req.body;
+    const student = db.students[rollNo];
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
+    
+    // Fiat physically transfers to college, Digital proxy is minted
+    db.collegeFiatBalance += parseFloat(amount);
+    student.balance += parseFloat(amount);
+    
+    const txn = { id: `TUP-${Date.now()}`, rollNo, amount: parseFloat(amount), date: new Date().toISOString(), type: 'TOP_UP', title: 'College Gateway Top-up' };
+    student.transactions.unshift(txn);
+    db.studentTopupHistory.unshift(txn);
+
+    res.json({ success: true, balance: student.balance, transaction: txn });
+});
+
+// --- 2. KIOSK APIs ---
+app.get('/api/kiosk/stores', (req, res) => {
+    const stores = Object.values(db.vendors).map(v => ({ id: v.id, name: v.name }));
+    res.json({ success: true, stores });
+});
+
+app.get('/api/kiosk/store/:storeId/products', (req, res) => {
+    const vendor = db.vendors[req.params.storeId];
+    if (!vendor) return res.status(404).json({ success: false, message: 'Store not found.' });
+    res.json({ success: true, products: vendor.products.filter(p => p.isActive) });
+});
+
+app.post('/api/kiosk/checkout', (req, res) => {
+    const { rollNo, storeId, amount, cart } = req.body;
+    const student = db.students[rollNo];
+    const vendor = db.vendors[storeId];
+
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
+    if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found.' });
+    if (student.balance < amount) return res.status(400).json({ success: false, message: 'Insufficient College Wallet balance. Top-up required.' });
+
+    // Deduct student, credit vendor
+    student.balance -= amount;
+    vendor.accumulatedBalance += amount;
+
+    // Adjust vendor stock
+    cart.forEach(cartItem => {
+        const prod = vendor.products.find(p => p.id === cartItem.id);
+        if (prod) prod.stock -= cartItem.quantity;
+    });
+
+    const itemsStr = cart.map(i => `${i.quantity}x ${i.name}`).join(', ');
+    const date = new Date().toISOString();
+
+    const studentTxn = { id: `TXN-${Date.now()}`, amount: amount, date: date, type: 'PURCHASE', title: `Paid at ${vendor.name}`, items: itemsStr };
+    student.transactions.unshift(studentTxn);
+
+    const vendorTxn = { id: `TXN-${Date.now()}`, rollNo, amount, date: new Date().toLocaleString(), items: itemsStr };
+    vendor.transactions.unshift(vendorTxn);
+
+    res.json({ success: true, message: `Payment of ₹${amount} successful.`, vendorName: vendor.name });
+});
+
+// --- 3. VENDOR ADMIN APIs ---
+app.get('/api/vendor/:storeId', (req, res) => {
+    const vendor = db.vendors[req.params.storeId];
+    if (!vendor) return res.status(404).json({ success: false, message: 'Store not found.' });
+    res.json({ success: true, vendor });
+});
+
+app.post('/api/vendor/:storeId/product', (req, res) => {
+    const vendor = db.vendors[req.params.storeId];
+    // Simple add logic for simulation
+    const newProduct = { ...req.body, id: Date.now().toString(), isActive: true };
+    vendor.products.push(newProduct);
+    res.json({ success: true, vendor });
+});
+
+app.post('/api/vendor/:storeId/product/toggle', (req, res) => {
+    const { productId } = req.body;
+    const vendor = db.vendors[req.params.storeId];
+    const p = vendor.products.find(p => p.id === productId);
+    if(p) p.isActive = !p.isActive;
+    res.json({ success: true, vendor });
+});
+
+// --- 4. COLLEGE ADMIN APIs ---
+app.get('/api/admin/dashboard', (req, res) => {
+    const totalPendingPayout = Object.values(db.vendors).reduce((acc, v) => acc + v.accumulatedBalance, 0);
+    const vendorBalances = Object.values(db.vendors).map(v => ({
+        id: v.id, name: v.name, bankAccount: v.bankAccount, accumulatedBalance: v.accumulatedBalance
+    }));
+
+    res.json({
+        success: true,
+        collegeFiatBalance: db.collegeFiatBalance,
+        totalPendingPayout,
+        vendorBalances,
+        topupHistory: db.studentTopupHistory
+    });
+});
+
+app.post('/api/admin/settle', (req, res) => {
+    // Run Midnight Batch Process
+    Object.values(db.vendors).forEach(vendor => {
+        vendor.accumulatedBalance = 0; // simulating bank transfer logic happening externally
+    });
+    res.json({ success: true, message: 'Midnight batch settlement complete.' });
+});
 
 // POST /api/send-otp
 // Body: { phoneNumber: "+91XXXXXXXXXX" }
 app.post('/api/send-otp', async (req, res) => {
     try {
-        const { phoneNumber } = req.body;
+        let { phoneNumber } = req.body;
 
         if (!phoneNumber || phoneNumber.trim() === '') {
             return res.status(400).json({
@@ -78,15 +222,17 @@ app.post('/api/send-otp', async (req, res) => {
                 message: 'Phone number is required.',
             });
         }
-
-        // Simple phone validation (at least 10 digits)
-        const cleaned = phoneNumber.replace(/\D/g, '');
-        if (cleaned.length < 10) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please enter a valid phone number (at least 10 digits).',
-            });
+        phoneNumber = String(phoneNumber);
+        // Hack for Kiosk app checkout: If this is a roll number, map it to the student's registered phone
+        if (phoneNumber.startsWith('21')) { // e.g. "21CS101"
+            const student = db.students[phoneNumber];
+            if (!student) {
+                return res.status(404).json({ success: false, message: 'Roll Number not found in database.' });
+            }
+            phoneNumber = student.phone; // Override the payload with actual phone
         }
+
+        const cleaned = phoneNumber.replace(/\D/g, '');
 
         // Generate OTP
         const otp = generateOTP();
@@ -143,8 +289,15 @@ app.post('/api/verify-otp', async (req, res) => {
                 message: 'Phone number and OTP are required.',
             });
         }
-
-        const cleaned = phoneNumber.replace(/\D/g, '');
+        
+        let cleaned = phoneNumber.replace(/\D/g, '');
+        // Hack for Kiosk: If the student entered a physical Roll Number instead of a phone number during checkout, resolve it to their phone.
+        if (phoneNumber.startsWith('21')) { // Mock hack recognizing roll numbers
+            const student = db.students[phoneNumber];
+            if (student) {
+                cleaned = student.phone.replace(/\D/g, '');
+            }
+        }
         const stored = otpStore.get(cleaned);
 
         if (!stored) {
