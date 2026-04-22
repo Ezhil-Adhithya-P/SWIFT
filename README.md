@@ -1,6 +1,3 @@
-#ennoda code daaw
-poda potta
-
 # SWIFT: Student Wallet Interactive Financial Terminal
 
 SWIFT is a completely integrated, end-to-end digital ecosystem simulating a college cashless economy. It uses a centralized Node.js Bank API and four separate front-end clients to process Twilio-secured 2FA transactions between students and vendors.
