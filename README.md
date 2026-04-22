@@ -1,4 +1,5 @@
 #ennoda code daaw
+poda potta
 
 # SWIFT: Student Wallet Interactive Financial Terminal
 
