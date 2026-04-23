@@ -1,4 +1,4 @@
-# SWIFT: Student Wallet Interactive Financial Terminal 🚀
+# SWIFT: Smart Wallet for Instant Fund Transfer 🚀
 
 SWIFT is a completely integrated, end-to-end digital ecosystem simulating a college cashless economy. It uses a centralized Node.js Bank API powered by **MySQL** and four separate front-end clients to process secure transactions between students and vendors.
 
