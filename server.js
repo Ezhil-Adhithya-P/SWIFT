@@ -264,6 +264,57 @@ app.post('/api/student/reset-password', async (req, res) => {
     }
 });
 
+// --- KIOSK OTP SYSTEM ---
+app.post('/api/send-otp', async (req, res) => {
+    try {
+        const { phoneNumber } = req.body; // In Kiosk, this is the RollNo
+        const [students] = await db.query('SELECT Phone FROM Students WHERE RollNo = ?', [phoneNumber]);
+        const student = students[0];
+        
+        if (!student) return res.status(404).json({ success: false, message: 'Roll number not found in registry.' });
+
+        const otp = generateOTP();
+        const expiresAt = Date.now() + OTP_EXPIRY_MS;
+        otpStore.set(phoneNumber, { otp, expiresAt });
+
+        console.log(`\n🔑 KIOSK OTP FOR ${phoneNumber}: ${otp}`);
+
+        if (MODE === 'live' && student.Phone) {
+            try {
+                await sendSMS(student.Phone, otp);
+            } catch (err) {
+                console.log("⚠️ Twilio failed. Falling back to local console for testing.");
+            }
+        }
+
+        res.json({ success: true, message: 'OTP sent to registered phone.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Fail to send OTP: ' + err.message });
+    }
+});
+
+app.post('/api/verify-otp', async (req, res) => {
+    try {
+        const { phoneNumber, otp } = req.body;
+        const stored = otpStore.get(phoneNumber);
+
+        if (!stored) return res.status(400).json({ success: false, message: 'OTP expired or not requested.' });
+        if (Date.now() > stored.expiresAt) {
+            otpStore.delete(phoneNumber);
+            return res.status(400).json({ success: false, message: 'OTP has expired.' });
+        }
+
+        if (stored.otp === otp.trim()) {
+            otpStore.delete(phoneNumber);
+            res.json({ success: true, message: 'OTP verified.' });
+        } else {
+            res.status(400).json({ success: false, message: 'Invalid verification code.' });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 // --- 1. STUDENT WALLET APIs ---
 app.get('/api/student/:rollNo', async (req, res) => {
     try {
@@ -373,7 +424,7 @@ app.post('/api/kiosk/checkout', async (req, res) => {
             await db.query('UPDATE Products SET Stock = Stock - ? WHERE ProductID = ?', [cartItem.quantity, cartItem.id]);
         }
 
-        const itemsStr = cart.map(i => `${i.quantity}x ${i.name}`).join(', ');
+        const itemsStr = cart.map(i => `${i.name}|${i.quantity}|${i.price}|${i.price * i.quantity}`).join(';;');
         const date = new Date().toISOString();
         const txnId = `TXN-${Math.floor(Math.random() * 90000) + 10000}`;
 
@@ -387,6 +438,21 @@ app.post('/api/kiosk/checkout', async (req, res) => {
 });
 
 // --- 3. VENDOR ADMIN APIs ---
+app.post('/api/vendor/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const [vendors] = await db.query('SELECT VendorID, Name FROM Vendors WHERE Username = ? AND Password = ?', [username, password]);
+        
+        if (vendors[0]) {
+            res.json({ success: true, vendorId: vendors[0].VendorID, vendorName: vendors[0].Name });
+        } else {
+            res.status(401).json({ success: false, message: 'Invalid credentials.' });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 app.get('/api/vendor/:storeId', async (req, res) => {
     try {
         const [vendors] = await db.query('SELECT * FROM Vendors WHERE VendorID = ?', [req.params.storeId]);
@@ -412,6 +478,18 @@ app.get('/api/vendor/:storeId', async (req, res) => {
     }
 });
 
+app.post('/api/vendor/:storeId/product', async (req, res) => {
+    try {
+        const { name, internalId, price, stock } = req.body;
+        const vendorId = req.params.storeId;
+        await db.query('INSERT INTO Products (VendorID, Name, InternalID, Price, Stock, IsActive) VALUES (?, ?, ?, ?, ?, 1)',
+            [vendorId, name, internalId, price, stock]);
+        res.json({ success: true, message: 'Product added successfully to Kiosk!' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 app.post('/api/vendor/:storeId/product/toggle', async (req, res) => {
     try {
         const { productId } = req.body;
@@ -427,17 +505,25 @@ app.get('/api/admin/dashboard', async (req, res) => {
     try {
         const [fiats] = await db.query('SELECT Balance FROM CollegeFiat WHERE Id = 1');
         const fiat = fiats[0];
+        
         const [vendors] = await db.query('SELECT VendorID as id, Name as name, BankAccount as bankAccount, PendingLedgerBalance as accumulatedBalance FROM Vendors');
-
         const totalPendingPayout = vendors.reduce((acc, v) => acc + Number(v.accumulatedBalance), 0);
-        const [topupHistory] = await db.query("SELECT TransactionID as id, RollNo as rollNo, Amount as amount, Timestamp as date, Title as title FROM Transactions WHERE Type = 'TOP_UP' ORDER BY Timestamp DESC");
-
+        
+        const [students] = await db.query('SELECT RollNo as rollNo, Name as name, Phone as phone, WalletBalance as balance FROM Students');
+        const [volumeResult] = await db.query('SELECT SUM(Amount) as totalVolume FROM Transactions');
+        
+        // Detailed Top-up history
+        const [topups] = await db.query("SELECT TransactionID as id, RollNo as rollNo, Amount as amount, Timestamp as date FROM Transactions WHERE Type = 'TOP_UP' ORDER BY Timestamp DESC");
+        
         res.json({
             success: true,
             collegeFiatBalance: fiat ? Number(fiat.Balance) : 0,
             totalPendingPayout,
-            vendorBalances: vendors.map(v => ({ ...v, accumulatedBalance: Number(v.accumulatedBalance) })),
-            topupHistory: topupHistory.map(t => ({ ...t, amount: Number(t.amount) }))
+            totalVolume: volumeResult[0]?.totalVolume || 0,
+            studentCount: students.length,
+            vendorBalances: vendors.map(v => ({ ...v, balance: Number(v.accumulatedBalance) })),
+            students: students.map(s => ({ ...s, balance: Number(s.balance) })),
+            topupHistory: topups.map(t => ({ ...t, amount: Number(t.amount) }))
         });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -456,10 +542,21 @@ app.post('/api/admin/settle', async (req, res) => {
 // --- NEW PRIVILEGED ADMIN APIs FOR CREATION ---
 app.post('/api/admin/student', async (req, res) => {
     try {
-        const { rollNo, name, yearOfStudy, department, phone } = req.body;
-        await db.query('INSERT INTO Students (RollNo, Name, YearOfStudy, Department, Phone) VALUES (?, ?, ?, ?, ?)',
-            [rollNo, name, yearOfStudy, department, phone]);
-        res.json({ success: true, message: 'Student created successfully in MySQL!' });
+        const { rollNo, name, phone, balance } = req.body;
+        await db.query('INSERT INTO Students (RollNo, Name, Phone, WalletBalance) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE WalletBalance = WalletBalance + ?',
+            [rollNo, name, phone, balance || 0, balance || 0]);
+        res.json({ success: true, message: 'Student wallet provisioned successfully!' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+app.post('/api/admin/shop', async (req, res) => {
+    try {
+        const { name, username, password, bankAccount } = req.body;
+        await db.query('INSERT INTO Vendors (Name, Username, Password, BankAccount) VALUES (?, ?, ?, ?)',
+            [name, username, password, bankAccount]);
+        res.json({ success: true, message: 'New shop commissioned successfully!' });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
