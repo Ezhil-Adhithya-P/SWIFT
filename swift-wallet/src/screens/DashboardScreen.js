@@ -1,17 +1,37 @@
-import React, { useContext } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import React, { useContext, useLayoutEffect } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
 import colors from '../theme/colors';
 import { WalletContext } from '../context/WalletContext';
 
 export default function DashboardScreen({ navigation }) {
-    const { balance, transactions } = useContext(WalletContext);
+    const { balance, transactions, logout, studentRollNo, studentName } = useContext(WalletContext);
+
+    const getGreeting = () => {
+        const hour = new Date().getHours();
+        if (hour < 12) return 'Good Morning';
+        if (hour < 18) return 'Good Afternoon';
+        return 'Good Evening';
+    };
+
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            headerRight: () => (
+                <TouchableOpacity onPress={() => {
+                    logout();
+                    navigation.replace('Login');
+                }}>
+                    <Text style={{ color: colors.white, fontWeight: 'bold', fontSize: 16 }}>Logout</Text>
+                </TouchableOpacity>
+            ),
+        });
+    }, [navigation, logout]);
 
     const renderItem = ({ item }) => {
         const dateObj = new Date(item.date);
         const dateString = dateObj.toLocaleDateString() + ' ' + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
         return (
-            <View style={styles.txCard}>
+            <TouchableOpacity style={styles.txCard} onPress={() => navigation.navigate('TransactionDetail', { transaction: item })}>
                 <View style={styles.txInfo}>
                     <Text style={styles.txTitle}>{item.title}</Text>
                     <Text style={styles.txDate}>{dateString}</Text>
@@ -19,23 +39,37 @@ export default function DashboardScreen({ navigation }) {
                 <Text style={[styles.txAmount, { color: item.type === 'TOP_UP' ? colors.success : colors.text }]}>
                     {item.type === 'TOP_UP' ? '+' : '-'} ₹{item.amount.toFixed(2)}
                 </Text>
-            </View>
+            </TouchableOpacity>
         );
     };
 
     return (
         <View style={styles.container}>
+            <View style={styles.greetingContainer}>
+                <Text style={styles.greetingText}>{getGreeting()},</Text>
+                <Text style={styles.nameText}>{studentName || 'Student'} ({studentRollNo})</Text>
+            </View>
+
             {/* Balance Card */}
             <View style={styles.balanceCard}>
                 <Text style={styles.balanceLabel}>Available Balance</Text>
                 <Text style={styles.balanceAmount}>₹{balance.toFixed(2)}</Text>
                 
-                <TouchableOpacity 
-                    style={styles.addButton}
-                    onPress={() => navigation.navigate('TopUp')}
-                >
-                    <Text style={styles.addButtonText}>+ Add Amount</Text>
-                </TouchableOpacity>
+                <View style={styles.buttonRow}>
+                    <TouchableOpacity 
+                        style={styles.addButton}
+                        onPress={() => navigation.navigate('TopUp')}
+                    >
+                        <Text style={styles.addButtonText}>+ Add Amount</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        style={styles.analyticsButton}
+                        onPress={() => navigation.navigate('Analytics')}
+                    >
+                        <Text style={styles.analyticsButtonText}>📊 Analytics</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Transaction History */}
@@ -59,9 +93,25 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: colors.background,
     },
+    greetingContainer: {
+        paddingHorizontal: 20,
+        paddingTop: 16,
+        paddingBottom: 8,
+    },
+    greetingText: {
+        fontSize: 16,
+        color: colors.textLight,
+    },
+    nameText: {
+        fontSize: 22,
+        fontWeight: 'bold',
+        color: colors.primary,
+        marginTop: 2,
+    },
     balanceCard: {
         backgroundColor: colors.primary,
-        margin: 16,
+        marginHorizontal: 16,
+        marginBottom: 16,
         padding: 24,
         borderRadius: 16,
         alignItems: 'center',
@@ -82,14 +132,32 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         marginBottom: 24,
     },
+    buttonRow: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 12,
+    },
     addButton: {
         backgroundColor: colors.secondary,
         paddingVertical: 12,
-        paddingHorizontal: 24,
+        paddingHorizontal: 16,
         borderRadius: 8,
     },
     addButtonText: {
         color: colors.primary,
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    analyticsButton: {
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.4)',
+    },
+    analyticsButtonText: {
+        color: colors.white,
         fontSize: 16,
         fontWeight: 'bold',
     },

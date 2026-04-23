@@ -9,6 +9,8 @@ import LoginScreen from './src/screens/LoginScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import TopUpScreen from './src/screens/TopUpScreen';
 import PaymentGatewayScreen from './src/screens/PaymentGatewayScreen';
+import TransactionDetailScreen from './src/screens/TransactionDetailScreen';
+import AnalyticsScreen from './src/screens/AnalyticsScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -36,7 +38,7 @@ export default function App() {
           <Stack.Screen 
             name="Dashboard" 
             component={DashboardScreen} 
-            options={{ title: 'Student Wallet', headerBackVisible: false }} 
+            options={{ title: 'REC Student Wallet', headerBackVisible: false }} 
           />
           <Stack.Screen 
             name="TopUp" 
@@ -47,6 +49,16 @@ export default function App() {
             name="PaymentGateway" 
             component={PaymentGatewayScreen} 
             options={{ title: 'Bank Payment' }} 
+          />
+          <Stack.Screen 
+            name="TransactionDetail" 
+            component={TransactionDetailScreen} 
+            options={{ title: 'Transaction Details' }} 
+          />
+          <Stack.Screen 
+            name="Analytics" 
+            component={AnalyticsScreen} 
+            options={{ title: 'Spending Analytics' }} 
           />
         </Stack.Navigator>
       </NavigationContainer>

@@ -1,11 +1,13 @@
 // ============================================
-// SWIFT OTP Verification Server
+// SWIFT API Server with MySQL DB Integration
 // ============================================
 
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const mysql = require('mysql2/promise');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const server = require('http').createServer(app);
@@ -13,7 +15,7 @@ const { Server } = require('socket.io');
 const io = new Server(server, { cors: { origin: '*' } });
 
 const PORT = process.env.PORT || 3000;
-const MODE = process.env.MODE || 'demo';
+const MODE = process.env.MODE || 'live';
 
 // Socket.IO connection handler
 io.on('connection', (socket) => {
@@ -28,11 +30,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 // In-memory OTP store: { phoneNumber: { otp, expiresAt } }
 const otpStore = new Map();
 
+// Nodemailer config for Forgot Password
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER || 'test@gmail.com',
+        pass: process.env.EMAIL_PASS || 'password'
+    }
+});
+
 // OTP config
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 
-// Generate a random numeric OTP
 function generateOTP(length = OTP_LENGTH) {
     let otp = '';
     for (let i = 0; i < length; i++) {
@@ -41,15 +51,12 @@ function generateOTP(length = OTP_LENGTH) {
     return otp;
 }
 
-// Send OTP via Twilio (live mode only)
 async function sendSMS(phoneNumber, otp) {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
 
-    // Fast2SMS used mobileNumber, but Twilio expects the full phoneNumber with country code e.g. +91XXXXXXXXXX
     const client = require('twilio')(accountSid, authToken);
-
     console.log(`\n📞 Attempting to send SMS to: ${phoneNumber} via Twilio`);
 
     const message = await client.messages.create({
@@ -63,322 +70,493 @@ async function sendSMS(phoneNumber, otp) {
 }
 
 // ============================================
-// SYSTEM DATABASE (Mocked in-memory for MVP)
+// MYSQL DATABASE INITIALIZATION
+// ============================================
+let db;
+
+async function initDB() {
+    // 1. Establish initial connection without a database to create it
+    const connection = await mysql.createConnection({
+        host: '127.0.0.1',
+        user: 'root',
+        password: 'pass123'
+    });
+
+    await connection.query('CREATE DATABASE IF NOT EXISTS swift_db');
+    await connection.end();
+
+    // 2. Connect to the specifically created swift_db database pool
+    db = mysql.createPool({
+        host: '127.0.0.1',
+        user: 'root',
+        password: 'pass123',
+        database: 'swift_db',
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0
+    });
+
+    // 3. Create all relational tables mapped to your requirements
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS Students (
+            RollNo VARCHAR(50) PRIMARY KEY,
+            Name VARCHAR(100),
+            YearOfStudy INT,
+            Department VARCHAR(100),
+            Phone VARCHAR(20),
+            Email VARCHAR(100) DEFAULT '',
+            Password VARCHAR(100) DEFAULT 'password123',
+            WalletBalance DECIMAL(10, 2) DEFAULT 0.0,
+            TotalAmountAdded DECIMAL(10, 2) DEFAULT 0.0,
+            LatestAmountAdded DECIMAL(10, 2) DEFAULT 0.0
+        )
+    `);
+
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS Vendors (
+            VendorID VARCHAR(50) PRIMARY KEY,
+            Name VARCHAR(100),
+            BankAccount VARCHAR(100),
+            PendingLedgerBalance DECIMAL(10, 2) DEFAULT 0.0
+        )
+    `);
+
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS Products (
+            ProductID VARCHAR(50) PRIMARY KEY,
+            VendorID VARCHAR(50),
+            Name VARCHAR(100),
+            InternalID VARCHAR(50),
+            Price DECIMAL(10, 2),
+            Stock INT,
+            IsActive TINYINT(1) DEFAULT 1,
+            FOREIGN KEY (VendorID) REFERENCES Vendors(VendorID)
+        )
+    `);
+
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS Transactions (
+            TransactionID VARCHAR(50) PRIMARY KEY,
+            RollNo VARCHAR(50),
+            VendorID VARCHAR(50),
+            Amount DECIMAL(10, 2),
+            Type VARCHAR(50),
+            Title VARCHAR(255),
+            Items TEXT,
+            Timestamp VARCHAR(100)
+        )
+    `);
+
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS CollegeFiat (
+            Id INT PRIMARY KEY,
+            Balance DECIMAL(15, 2) DEFAULT 0.0
+        )
+    `);
+
+    // 4. Seed default Mock Data if tables are completely empty
+    const [rows] = await db.query('SELECT COUNT(*) as c FROM Students');
+    if (rows[0].c === 0) {
+        console.log("🌱 Seeding MySQL database with mock data...");
+        await db.query('INSERT IGNORE INTO CollegeFiat (Id, Balance) VALUES (1, 12500)');
+
+        await db.query('INSERT INTO Students (RollNo, Name, YearOfStudy, Department, Phone, WalletBalance, TotalAmountAdded, LatestAmountAdded) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            ['21CS101', 'Test Student 1', 3, 'CSE', process.env.VERIFIED_RECIPIENT_NUMBER || '+910000000000', 500, 500, 500]);
+        await db.query('INSERT INTO Students (RollNo, Name, YearOfStudy, Department, Phone, WalletBalance, TotalAmountAdded, LatestAmountAdded) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            ['21IT105', 'Test Student 2', 3, 'IT', '+910000000000', 1000, 1000, 1000]);
+
+        await db.query('INSERT INTO Vendors (VendorID, Name, BankAccount, PendingLedgerBalance) VALUES (?, ?, ?, ?)', ['1', 'Campus Canteen', 'SBI-XXXX-1234', 1450]);
+        await db.query('INSERT INTO Vendors (VendorID, Name, BankAccount, PendingLedgerBalance) VALUES (?, ?, ?, ?)', ['2', 'Stationery Shop', 'HDFC-XXXX-4567', 820]);
+
+        await db.query('INSERT INTO Products (ProductID, VendorID, Name, InternalID, Price, Stock, IsActive) VALUES (?, ?, ?, ?, ?, ?, ?)', ['1', '1', 'Veg Sandwich', 'ITM-001', 40, 15, 1]);
+        await db.query('INSERT INTO Products (ProductID, VendorID, Name, InternalID, Price, Stock, IsActive) VALUES (?, ?, ?, ?, ?, ?, ?)', ['2', '1', 'Cold Coffee', 'ITM-002', 30, 20, 1]);
+        await db.query('INSERT INTO Products (ProductID, VendorID, Name, InternalID, Price, Stock, IsActive) VALUES (?, ?, ?, ?, ?, ?, ?)', ['4', '2', 'A4 Paper Rim', 'ITM-004', 200, 5, 1]);
+        await db.query('INSERT INTO Products (ProductID, VendorID, Name, InternalID, Price, Stock, IsActive) VALUES (?, ?, ?, ?, ?, ?, ?)', ['5', '2', 'Blue Pen', 'ITM-005', 25, 50, 1]);
+    }
+}
+
+// ============================================
+// API Routes (MySQL Integration)
 // ============================================
 
-const db = {
-    collegeFiatBalance: 12500, // Total actual fiat mapped to tokens
-    students: {
-        '21CS101': { rollNo: '21CS101', phone: process.env.VERIFIED_RECIPIENT_NUMBER, balance: 500, transactions: [] },
-        '21IT105': { rollNo: '21IT105', phone: '+910000000000', balance: 1000, transactions: [] },
-    },
-    vendors: {
-        '1': {
-            id: '1', name: 'Campus Canteen', accumulatedBalance: 1450, bankAccount: 'SBI-XXXX-1234',
-            products: [
-                { id: '1', name: 'Veg Sandwich', internalId: 'ITM-001', stock: 15, isActive: true, price: 40 },
-                { id: '2', name: 'Cold Coffee', internalId: 'ITM-002', stock: 20, isActive: true, price: 30 },
-            ],
-            transactions: []
-        },
-        '2': {
-            id: '2', name: 'Stationery Shop', accumulatedBalance: 820, bankAccount: 'HDFC-XXXX-4567',
-            products: [
-                { id: '4', name: 'A4 Paper Rim', internalId: 'ITM-004', stock: 5, isActive: true, price: 200 },
-                { id: '5', name: 'Blue Pen', internalId: 'ITM-005', stock: 50, isActive: true, price: 25 },
-            ],
-            transactions: []
-        }
-    },
-    studentTopupHistory: [], // Admin sees this
-};
-
-// ============================================
-// API Routes (Integration Endpoints)
-// ============================================
-
-// --- 1. STUDENT WALLET APIs ---
-app.get('/api/student/:rollNo', (req, res) => {
-    const student = db.students[req.params.rollNo];
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
-    res.json({ success: true, student });
+// --- 0. STUDENT AUTH APIs ---
+app.post('/api/student/login', async (req, res) => {
+    try {
+        const { rollNo, password } = req.body;
+        const [students] = await db.query('SELECT * FROM Students WHERE RollNo = ?', [rollNo]);
+        const student = students[0];
+        
+        if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
+        if (student.Password !== password) return res.status(401).json({ success: false, message: 'Invalid password.' });
+        
+        res.json({ success: true, message: 'Login successful', rollNo: student.RollNo });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
-app.post('/api/student/topup', (req, res) => {
-    const { rollNo, amount } = req.body;
-    const student = db.students[rollNo];
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
-    
-    // Fiat physically transfers to college, Digital proxy is minted
-    db.collegeFiatBalance += parseFloat(amount);
-    student.balance += parseFloat(amount);
-    
-    const txn = { id: `TUP-${Date.now()}`, rollNo, amount: parseFloat(amount), date: new Date().toISOString(), type: 'TOP_UP', title: 'College Gateway Top-up' };
-    student.transactions.unshift(txn);
-    db.studentTopupHistory.unshift(txn);
+app.post('/api/student/forgot-password', async (req, res) => {
+    try {
+        const { rollNo } = req.body;
+        const [students] = await db.query('SELECT * FROM Students WHERE RollNo = ?', [rollNo]);
+        const student = students[0];
+        
+        if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
+        
+        const otp = generateOTP();
+        const expiresAt = Date.now() + OTP_EXPIRY_MS;
+        otpStore.set(rollNo, { otp, expiresAt });
+        
+        // Try sending Email
+        if (student.Email) {
+            const mailOptions = {
+                from: process.env.EMAIL_USER || 'noreply@swift.edu',
+                to: student.Email,
+                subject: 'SWIFT Wallet - Password Reset OTP',
+                html: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                        <h2 style="color: #6C63FF; border-bottom: 2px solid #eee; padding-bottom: 10px;">SWIFT Security Alert</h2>
+                        <p>Hello <b>${student.Name}</b>,</p>
+                        <p>We received a request to reset your SWIFT Student Wallet password.</p>
+                        <p>Your One-Time Password (OTP) is: <strong style="font-size: 24px; color: #E74C3C;">${otp}</strong></p>
+                        <p>This code expires in 5 minutes. Do not share it with anyone.</p>
+                    </div>
+                `
+            };
+            try {
+                await transporter.sendMail(mailOptions);
+                console.log(`✉️ Email OTP sent to ${student.Email}`);
+            } catch (err) {
+                console.log(`⚠️ Email failed (check credentials). Sent OTP locally: ${otp}`);
+            }
+        }
+        
+        // Also send SMS to registered phone via Twilio
+        if (student.Phone && MODE === 'live') {
+            await sendSMS(student.Phone, otp);
+        }
+        
+        res.json({ success: true, message: 'OTP sent to your registered Email and Phone.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
 
-    res.json({ success: true, balance: student.balance, transaction: txn });
+app.post('/api/student/reset-password', async (req, res) => {
+    try {
+        const { rollNo, otp, newPassword } = req.body;
+        
+        const stored = otpStore.get(rollNo);
+        if (!stored) return res.status(400).json({ success: false, message: 'No OTP requested or expired.' });
+        if (Date.now() > stored.expiresAt) {
+            otpStore.delete(rollNo);
+            return res.status(400).json({ success: false, message: 'OTP expired.' });
+        }
+        if (stored.otp !== otp.trim()) return res.status(400).json({ success: false, message: 'Invalid OTP.' });
+        
+        // Valid OTP, reset password
+        await db.query('UPDATE Students SET Password = ? WHERE RollNo = ?', [newPassword, rollNo]);
+        otpStore.delete(rollNo);
+        
+        res.json({ success: true, message: 'Password reset successfully! You can now log in.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// --- 1. STUDENT WALLET APIs ---
+app.get('/api/student/:rollNo', async (req, res) => {
+    try {
+        const [students] = await db.query('SELECT * FROM Students WHERE RollNo = ?', [req.params.rollNo]);
+        const student = students[0];
+        if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
+
+        const [txns] = await db.query('SELECT * FROM Transactions WHERE RollNo = ? ORDER BY Timestamp DESC', [req.params.rollNo]);
+
+        res.json({
+            success: true,
+            student: {
+                rollNo: student.RollNo,
+                name: student.Name,
+                department: student.Department,
+                yearOfStudy: student.YearOfStudy,
+                phone: student.Phone,
+                balance: Number(student.WalletBalance),
+                totalAmountAdded: Number(student.TotalAmountAdded),
+                latestAmountAdded: Number(student.LatestAmountAdded),
+                transactions: txns.map(t => ({
+                    id: t.TransactionID,
+                    amount: Number(t.Amount),
+                    date: t.Timestamp,
+                    type: t.Type,
+                    title: t.Title,
+                    items: t.Items
+                }))
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+app.post('/api/student/topup', async (req, res) => {
+    try {
+        const { rollNo, amount } = req.body;
+        const [students] = await db.query('SELECT * FROM Students WHERE RollNo = ?', [rollNo]);
+        if (!students[0]) return res.status(404).json({ success: false, message: 'Student not found.' });
+
+        const topupAmt = parseFloat(amount);
+
+        await db.query('UPDATE CollegeFiat SET Balance = Balance + ? WHERE Id = 1', [topupAmt]);
+        await db.query('UPDATE Students SET WalletBalance = WalletBalance + ?, TotalAmountAdded = TotalAmountAdded + ?, LatestAmountAdded = ? WHERE RollNo = ?',
+            [topupAmt, topupAmt, topupAmt, rollNo]);
+
+        const txnId = `TUP-${Math.floor(Math.random() * 90000) + 10000}`;
+        const timestamp = new Date().toISOString();
+
+        await db.query('INSERT INTO Transactions (TransactionID, RollNo, Amount, Type, Title, Timestamp) VALUES (?, ?, ?, ?, ?, ?)',
+            [txnId, rollNo, topupAmt, 'TOP_UP', 'College Gateway Top-up', timestamp]);
+
+        const [updatedStudents] = await db.query('SELECT WalletBalance FROM Students WHERE RollNo = ?', [rollNo]);
+
+        res.json({
+            success: true,
+            balance: Number(updatedStudents[0].WalletBalance),
+            transaction: { id: txnId, amount: topupAmt, date: timestamp, type: 'TOP_UP', title: 'College Gateway Top-up' }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 // --- 2. KIOSK APIs ---
-app.get('/api/kiosk/stores', (req, res) => {
-    const stores = Object.values(db.vendors).map(v => ({ id: v.id, name: v.name }));
-    res.json({ success: true, stores });
+app.get('/api/kiosk/stores', async (req, res) => {
+    try {
+        const [stores] = await db.query('SELECT VendorID as id, Name as name FROM Vendors');
+        res.json({ success: true, stores });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
-app.get('/api/kiosk/store/:storeId/products', (req, res) => {
-    const vendor = db.vendors[req.params.storeId];
-    if (!vendor) return res.status(404).json({ success: false, message: 'Store not found.' });
-    res.json({ success: true, products: vendor.products.filter(p => p.isActive) });
+app.get('/api/kiosk/store/:storeId/products', async (req, res) => {
+    try {
+        const [vendors] = await db.query('SELECT * FROM Vendors WHERE VendorID = ?', [req.params.storeId]);
+        if (!vendors[0]) return res.status(404).json({ success: false, message: 'Store not found.' });
+
+        const [products] = await db.query('SELECT ProductID as id, Name as name, InternalID as internalId, Price as price, Stock as stock, IsActive as isActive FROM Products WHERE VendorID = ? AND IsActive = 1', [req.params.storeId]);
+
+        res.json({ success: true, products: products.map(p => ({ ...p, isActive: Boolean(p.isActive) })) });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
-app.post('/api/kiosk/checkout', (req, res) => {
-    const { rollNo, storeId, amount, cart } = req.body;
-    const student = db.students[rollNo];
-    const vendor = db.vendors[storeId];
+app.post('/api/kiosk/checkout', async (req, res) => {
+    try {
+        const { rollNo, storeId, amount, cart } = req.body;
+        const [students] = await db.query('SELECT * FROM Students WHERE RollNo = ?', [rollNo]);
+        const [vendors] = await db.query('SELECT * FROM Vendors WHERE VendorID = ?', [storeId]);
 
-    if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
-    if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found.' });
-    if (student.balance < amount) return res.status(400).json({ success: false, message: 'Insufficient College Wallet balance. Top-up required.' });
+        const student = students[0];
+        const vendor = vendors[0];
 
-    // Deduct student, credit vendor
-    student.balance -= amount;
-    vendor.accumulatedBalance += amount;
+        if (!student) return res.status(404).json({ success: false, message: 'Student not found.' });
+        if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found.' });
+        if (Number(student.WalletBalance) < amount) return res.status(400).json({ success: false, message: 'Insufficient College Wallet balance. Top-up required.' });
 
-    // Adjust vendor stock
-    cart.forEach(cartItem => {
-        const prod = vendor.products.find(p => p.id === cartItem.id);
-        if (prod) prod.stock -= cartItem.quantity;
-    });
+        await db.query('UPDATE Students SET WalletBalance = WalletBalance - ? WHERE RollNo = ?', [amount, rollNo]);
+        await db.query('UPDATE Vendors SET PendingLedgerBalance = PendingLedgerBalance + ? WHERE VendorID = ?', [amount, storeId]);
 
-    const itemsStr = cart.map(i => `${i.quantity}x ${i.name}`).join(', ');
-    const date = new Date().toISOString();
+        // Adjust vendor stock
+        for (const cartItem of cart) {
+            await db.query('UPDATE Products SET Stock = Stock - ? WHERE ProductID = ?', [cartItem.quantity, cartItem.id]);
+        }
 
-    const studentTxn = { id: `TXN-${Date.now()}`, amount: amount, date: date, type: 'PURCHASE', title: `Paid at ${vendor.name}`, items: itemsStr };
-    student.transactions.unshift(studentTxn);
+        const itemsStr = cart.map(i => `${i.quantity}x ${i.name}`).join(', ');
+        const date = new Date().toISOString();
+        const txnId = `TXN-${Math.floor(Math.random() * 90000) + 10000}`;
 
-    const vendorTxn = { id: `TXN-${Date.now()}`, rollNo, amount, date: new Date().toLocaleString(), items: itemsStr };
-    vendor.transactions.unshift(vendorTxn);
+        await db.query('INSERT INTO Transactions (TransactionID, RollNo, VendorID, Amount, Type, Title, Items, Timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [txnId, rollNo, storeId, amount, 'PURCHASE', `Paid at ${vendor.Name}`, itemsStr, date]);
 
-    res.json({ success: true, message: `Payment of ₹${amount} successful.`, vendorName: vendor.name });
+        res.json({ success: true, message: `Payment of ₹${amount} successful.`, vendorName: vendor.Name });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 // --- 3. VENDOR ADMIN APIs ---
-app.get('/api/vendor/:storeId', (req, res) => {
-    const vendor = db.vendors[req.params.storeId];
-    if (!vendor) return res.status(404).json({ success: false, message: 'Store not found.' });
-    res.json({ success: true, vendor });
+app.get('/api/vendor/:storeId', async (req, res) => {
+    try {
+        const [vendors] = await db.query('SELECT * FROM Vendors WHERE VendorID = ?', [req.params.storeId]);
+        const vendor = vendors[0];
+        if (!vendor) return res.status(404).json({ success: false, message: 'Store not found.' });
+
+        const [products] = await db.query('SELECT ProductID as id, Name as name, InternalID as internalId, Price as price, Stock as stock, IsActive as isActive FROM Products WHERE VendorID = ?', [req.params.storeId]);
+        const [txns] = await db.query('SELECT * FROM Transactions WHERE VendorID = ? ORDER BY Timestamp DESC', [req.params.storeId]);
+
+        res.json({
+            success: true,
+            vendor: {
+                id: vendor.VendorID,
+                name: vendor.Name,
+                accumulatedBalance: Number(vendor.PendingLedgerBalance),
+                bankAccount: vendor.BankAccount,
+                products: products.map(p => ({ ...p, price: Number(p.price), isActive: Boolean(p.isActive) })),
+                transactions: txns.map(t => ({ id: t.TransactionID, rollNo: t.RollNo, amount: Number(t.Amount), date: t.Timestamp, items: t.Items }))
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
-app.post('/api/vendor/:storeId/product', (req, res) => {
-    const vendor = db.vendors[req.params.storeId];
-    // Simple add logic for simulation
-    const newProduct = { ...req.body, id: Date.now().toString(), isActive: true };
-    vendor.products.push(newProduct);
-    res.json({ success: true, vendor });
-});
-
-app.post('/api/vendor/:storeId/product/toggle', (req, res) => {
-    const { productId } = req.body;
-    const vendor = db.vendors[req.params.storeId];
-    const p = vendor.products.find(p => p.id === productId);
-    if(p) p.isActive = !p.isActive;
-    res.json({ success: true, vendor });
+app.post('/api/vendor/:storeId/product/toggle', async (req, res) => {
+    try {
+        const { productId } = req.body;
+        await db.query('UPDATE Products SET IsActive = CASE WHEN IsActive = 1 THEN 0 ELSE 1 END WHERE ProductID = ?', [productId]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 // --- 4. COLLEGE ADMIN APIs ---
-app.get('/api/admin/dashboard', (req, res) => {
-    const totalPendingPayout = Object.values(db.vendors).reduce((acc, v) => acc + v.accumulatedBalance, 0);
-    const vendorBalances = Object.values(db.vendors).map(v => ({
-        id: v.id, name: v.name, bankAccount: v.bankAccount, accumulatedBalance: v.accumulatedBalance
-    }));
+app.get('/api/admin/dashboard', async (req, res) => {
+    try {
+        const [fiats] = await db.query('SELECT Balance FROM CollegeFiat WHERE Id = 1');
+        const fiat = fiats[0];
+        const [vendors] = await db.query('SELECT VendorID as id, Name as name, BankAccount as bankAccount, PendingLedgerBalance as accumulatedBalance FROM Vendors');
 
-    res.json({
-        success: true,
-        collegeFiatBalance: db.collegeFiatBalance,
-        totalPendingPayout,
-        vendorBalances,
-        topupHistory: db.studentTopupHistory
-    });
+        const totalPendingPayout = vendors.reduce((acc, v) => acc + Number(v.accumulatedBalance), 0);
+        const [topupHistory] = await db.query("SELECT TransactionID as id, RollNo as rollNo, Amount as amount, Timestamp as date, Title as title FROM Transactions WHERE Type = 'TOP_UP' ORDER BY Timestamp DESC");
+
+        res.json({
+            success: true,
+            collegeFiatBalance: fiat ? Number(fiat.Balance) : 0,
+            totalPendingPayout,
+            vendorBalances: vendors.map(v => ({ ...v, accumulatedBalance: Number(v.accumulatedBalance) })),
+            topupHistory: topupHistory.map(t => ({ ...t, amount: Number(t.amount) }))
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
-app.post('/api/admin/settle', (req, res) => {
-    // Run Midnight Batch Process
-    Object.values(db.vendors).forEach(vendor => {
-        vendor.accumulatedBalance = 0; // simulating bank transfer logic happening externally
-    });
-    res.json({ success: true, message: 'Midnight batch settlement complete.' });
+app.post('/api/admin/settle', async (req, res) => {
+    try {
+        await db.query('UPDATE Vendors SET PendingLedgerBalance = 0');
+        res.json({ success: true, message: 'Midnight batch settlement complete. Database reset.' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// --- NEW PRIVILEGED ADMIN APIs FOR CREATION ---
+app.post('/api/admin/student', async (req, res) => {
+    try {
+        const { rollNo, name, yearOfStudy, department, phone } = req.body;
+        await db.query('INSERT INTO Students (RollNo, Name, YearOfStudy, Department, Phone) VALUES (?, ?, ?, ?, ?)',
+            [rollNo, name, yearOfStudy, department, phone]);
+        res.json({ success: true, message: 'Student created successfully in MySQL!' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+app.post('/api/admin/vendor', async (req, res) => {
+    try {
+        const { vendorId, name, bankAccount } = req.body;
+        await db.query('INSERT INTO Vendors (VendorID, Name, BankAccount) VALUES (?, ?, ?)',
+            [vendorId, name, bankAccount]);
+        res.json({ success: true, message: 'Vendor created successfully in MySQL!' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 // POST /api/send-otp
-// Body: { phoneNumber: "+91XXXXXXXXXX" }
 app.post('/api/send-otp', async (req, res) => {
     try {
         let { phoneNumber } = req.body;
 
         if (!phoneNumber || phoneNumber.trim() === '') {
-            return res.status(400).json({
-                success: false,
-                message: 'Phone number is required.',
-            });
+            return res.status(400).json({ success: false, message: 'Phone number is required.' });
         }
         phoneNumber = String(phoneNumber);
-        // Hack for Kiosk app checkout: If this is a roll number, map it to the student's registered phone
-        if (phoneNumber.startsWith('21')) { // e.g. "21CS101"
-            const student = db.students[phoneNumber];
-            if (!student) {
+
+        if (phoneNumber.startsWith('21')) {
+            const [students] = await db.query('SELECT Phone FROM Students WHERE RollNo = ?', [phoneNumber]);
+            if (!students[0]) {
                 return res.status(404).json({ success: false, message: 'Roll Number not found in database.' });
             }
-            phoneNumber = student.phone; // Override the payload with actual phone
+            phoneNumber = students[0].Phone;
         }
 
         const cleaned = phoneNumber.replace(/\D/g, '');
-
-        // Generate OTP
         const otp = generateOTP();
         const expiresAt = Date.now() + OTP_EXPIRY_MS;
 
-        // Store OTP
         otpStore.set(cleaned, { otp, expiresAt });
-
         console.log(`[${MODE.toUpperCase()}] OTP for ${phoneNumber}: ${otp}`);
 
         if (MODE === 'live') {
-            // Send via Twilio
             await sendSMS(phoneNumber, otp);
-            return res.json({
-                success: true,
-                message: 'OTP sent successfully to your phone number.',
-                mode: 'live',
-            });
-        } else if (MODE === 'lan') {
-            // Send via WebSockets to connected phone
-            io.emit('receive_otp', { phoneNumber, otp });
-            return res.json({
-                success: true,
-                message: 'OTP sent to your phone via Local Network.',
-                mode: 'lan',
-            });
+            return res.json({ success: true, message: 'OTP sent successfully via MySQL + Twilio.' });
         } else {
-            // Demo mode — return OTP in response
-            return res.json({
-                success: true,
-                message: 'OTP generated successfully (Demo Mode).',
-                mode: 'demo',
-                otp: otp, // Only exposed in demo mode!
-            });
+            return res.json({ success: true, message: 'OTP generated (Demo)', otp: otp });
         }
     } catch (error) {
-        console.error('Error sending OTP:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Failed to send OTP. Please try again.',
-        });
+        return res.status(500).json({ success: false, message: 'Failed to send OTP.' });
     }
 });
 
 // POST /api/verify-otp
-// Body: { phoneNumber: "+91XXXXXXXXXX", otp: "123456" }
 app.post('/api/verify-otp', async (req, res) => {
     try {
         const { phoneNumber, otp } = req.body;
+        if (!phoneNumber || !otp) return res.status(400).json({ success: false, message: 'Required.' });
 
-        if (!phoneNumber || !otp) {
-            return res.status(400).json({
-                success: false,
-                message: 'Phone number and OTP are required.',
-            });
-        }
-        
         let cleaned = phoneNumber.replace(/\D/g, '');
-        // Hack for Kiosk: If the student entered a physical Roll Number instead of a phone number during checkout, resolve it to their phone.
-        if (phoneNumber.startsWith('21')) { // Mock hack recognizing roll numbers
-            const student = db.students[phoneNumber];
-            if (student) {
-                cleaned = student.phone.replace(/\D/g, '');
-            }
+        if (phoneNumber.startsWith('21')) {
+            const [students] = await db.query('SELECT Phone FROM Students WHERE RollNo = ?', [phoneNumber]);
+            if (students[0]) cleaned = students[0].Phone.replace(/\D/g, '');
         }
+
         const stored = otpStore.get(cleaned);
-
-        if (!stored) {
-            return res.json({
-                success: false,
-                message: 'No OTP found for this number. Please request a new one.',
-            });
-        }
-
-        // Check expiry
+        if (!stored) return res.json({ success: false, message: 'No OTP found.' });
         if (Date.now() > stored.expiresAt) {
             otpStore.delete(cleaned);
-            return res.json({
-                success: false,
-                message: 'OTP has expired. Please request a new one.',
-            });
+            return res.json({ success: false, message: 'OTP expired.' });
         }
 
-        // Verify
         if (stored.otp === otp.trim()) {
-            otpStore.delete(cleaned); // One-time use
-            return res.json({
-                success: true,
-                message: 'OTP verified successfully!',
-            });
+            otpStore.delete(cleaned);
+            return res.json({ success: true, message: 'OTP verified successfully via MySQL Engine!' });
         } else {
-            return res.json({
-                success: false,
-                message: 'Invalid OTP. Please try again.',
-            });
+            return res.json({ success: false, message: 'Invalid OTP.' });
         }
     } catch (error) {
-        console.error('Error verifying OTP:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Verification failed. Please try again.',
-        });
+        return res.status(500).json({ success: false, message: 'Verification failed.' });
     }
 });
 
-// Serve the custom receiver html
-app.get('/receiver', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'receiver.html'));
-});
-
-// Serve the frontend (catch-all fallback)
+// Serve frontend routing fallback
 app.use((req, res, next) => {
-    if (req.method === 'GET' && !req.path.startsWith('/api') && req.path !== '/receiver') {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) {
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     } else {
         next();
     }
 });
 
-// Start server
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n🚀 SWIFT OTP Server running!`);
-    console.log(`💻 Laptop URL: http://localhost:${PORT}`);
-    
-    // Get local network IP for the phone
-    const { networkInterfaces } = require('os');
-    const nets = networkInterfaces();
-    let localIp = 'localhost';
-    for (const name of Object.keys(nets)) {
-        for (const net of nets[name]) {
-            if (net.family === 'IPv4' && !net.internal) {
-                localIp = net.address;
-            }
-        }
-    }
-    
-    if (MODE === 'lan') {
-         console.log(`📱 Phone URL (Hotspot Hack): http://${localIp}:${PORT}/receiver`);
-    }
-
-    console.log(`📱 Mode: ${MODE.toUpperCase()}`);
-    if (MODE === 'demo') {
-        console.log(`ℹ️  Demo mode: OTP will be displayed on screen (no SMS sent)\n`);
-    } else if (MODE === 'lan') {
-        console.log(`📶 LAN mode: Open the Phone URL on your mobile browser over hotspot!\n`);
-    } else {
-        console.log(`📨 Live mode: OTP will be sent via Twilio SMS\n`);
-    }
+// Initialize DB and Start Server
+initDB().then(() => {
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`\n🚀 SWIFT Server running strictly on MySQL Architecture!`);
+        console.log(`💻 URL: http://localhost:${PORT}`);
+    });
+}).catch(err => {
+    console.error("Failed to initialize MySQL database:", err);
 });
