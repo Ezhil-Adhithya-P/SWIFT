@@ -1,23 +1,23 @@
-# SWIFT: Smart Wallet & Integrated Fintech Terminal
+# SWIFT: Smart Wallet for Instant Fund Transfer
 
-A production-ready unified ecosystem for college kiosks, providing seamless digital payments, vendor inventory management, and administrative oversight.
+An unified ecosystem for college kiosks, providing seamless digital payments, vendor inventory management and administrative oversight.
 
-## 🚀 Ecosystem Components
+##  Ecosystem Components
 
-*   **swift-kiosk**: Touchscreen terminal interface for students to browse and purchase items.
-*   **swift-wallet**: Mobile application (Expo/React Native) for students to manage balance and view transaction history.
+*   **swift-wallet**: Mobile app for students to manage balance, view transaction history and get insights about their transactions.
+*   **swift-kiosk**: Web-app interface for students to browse and purchase items.
 *   **swift-vendor**: Management portal for shop owners to track sales and update inventory.
 *   **swift-admin**: Centralized dashboard for college administration to provision wallets and settle payments.
 *   **backend (server.js)**: Robust Node.js + MySQL engine handling all transactional logic and OTP verification.
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
-*   **Frontend**: React.js (Vite), React Native (Expo)
-*   **Backend**: Node.js, Express
-*   **Database**: MySQL
-*   **Authentication**: OTP-based Identity Verification (Twilio)
+*   **Frontend**: React.js (For kiosk, vendor and admin web-apps), React Native (for student wallet mobile app)
+*   **Backend**: Node.js, ExpressJS
+*   **Database**: MySQL (for the maintainance of structured records across the ecosystem)
+*   **Authentication**: OTP-based Identity Verification (using Twilio)
 
-## 📦 Setup
+##  Setup
 
 1. Configure MySQL database using the provided schema.
 2. Set up `.env` with Twilio credentials and DB details.
