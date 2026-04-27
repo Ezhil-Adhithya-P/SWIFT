@@ -4,7 +4,7 @@ import { Alert } from 'react-native';
 export const WalletContext = createContext();
 
 // Use your computer's local IP address if testing on a physical phone, e.g., 'http://192.168.1.5:3000/api'
-const API_URL = 'http://192.168.0.105:3000/api'; // Using Hotspot HackIP
+const API_URL = 'http://10.50.38.4:3000/api';
 
 export const WalletProvider = ({ children }) => {
     const [balance, setBalance] = useState(0);

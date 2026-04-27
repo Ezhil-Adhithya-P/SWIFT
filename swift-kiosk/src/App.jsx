@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import './App.css';
 
-const API_URL = 'http://localhost:3000/api';
+const API_URL = 'http://10.50.38.4:3000/api';
 
 function App() {
   const [step, setStep] = useState('HOME');
