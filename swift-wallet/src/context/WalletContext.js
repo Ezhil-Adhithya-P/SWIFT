@@ -4,7 +4,7 @@ import { Alert } from 'react-native';
 export const WalletContext = createContext();
 
 // Use your computer's local IP address if testing on a physical phone, e.g., 'http://192.168.1.5:3000/api'
-const API_URL = 'http://10.50.38.4:3000/api';
+const API_URL = 'http://192.168.0.109:3000/api';
 
 export const WalletProvider = ({ children }) => {
     const [balance, setBalance] = useState(0);
@@ -17,7 +17,7 @@ export const WalletProvider = ({ children }) => {
         try {
             // Utilizing proper LAN IP for physical device
             const res = await fetch(`${API_URL}/student/${studentRollNo}`);
-            
+
             const data = await res.json();
             if (data.success) {
                 setBalance(data.student.balance);
@@ -110,7 +110,7 @@ export const WalletProvider = ({ children }) => {
     };
 
     return (
-        <WalletContext.Provider value={{ 
+        <WalletContext.Provider value={{
             balance, transactions, addFunds, refreshWallet: fetchWalletData,
             studentRollNo, studentName, login, logout, requestPasswordReset, resetPassword
         }}>

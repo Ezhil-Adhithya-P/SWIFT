@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, Cell, LineChart, Line, PieChart, Pie } from 'recharts';
 import './App.css';
 
-const API_URL = 'http://10.50.38.4:3000/api';
+const API_URL = 'http://192.168.0.109:3000/api';
 const COLORS = ['#3B0764', '#10B981', '#F59E0B', '#3B82F6', '#EF4444'];
 
 function App() {
